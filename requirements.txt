@@ -1,0 +1,28 @@
+# ML Trading System - Requirements
+# Install with: pip install -r requirements.txt
+
+# Core data
+yfinance>=0.2.36
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0          # parquet caching
+
+# Machine learning
+xgboost>=2.0.0
+hmmlearn>=0.3.0
+scikit-learn>=1.4.0
+
+# Volatility modelling (GARCH)
+arch>=6.3.0
+
+# Optimisation
+scipy>=1.11.0
+
+# Interactive visualisation (replaces matplotlib)
+plotly>=5.18.0
+
+# Optional: static PNG export from Plotly (needs kaleido)
+# kaleido>=0.2.1
+
+# Optional: OHLC candlestick fallback in non-Plotly context
+# mplfinance>=0.12.10b0
