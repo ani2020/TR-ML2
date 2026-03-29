@@ -159,6 +159,10 @@ class GARCHVolatilityModule:
             raise ValueError("DataFrame must have 'returns' column")
         self.fit(df["returns"])
         garch_series = self.predict_series(df["returns"])
+        # Drop existing garch columns so join never raises overlap error
+        for _col in ["garch_vol", "garch_next_vol"]:
+            if _col in df.columns:
+                df.drop(columns=[_col], inplace=True)
         df = df.join(garch_series, how="left")
         df["garch_next_vol"] = self.forecast_next()
         logger.info(f"[GARCH] Added garch_vol to DataFrame. Next-period vol: {df['garch_next_vol'].iloc[-1]:.4f}")
