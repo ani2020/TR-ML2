@@ -11,9 +11,9 @@ import json
 
 @dataclass
 class DataConfig:
-    ticker: str = "SPY"
+    ticker: str = "^NSEI"
     start_date: str = "2014-01-01"
-    end_date: str = "2024-01-01"
+    end_date: str = "2026-03-30"
     interval: str = "1d"
     cache_dir: str = "cache"
     raw_cache_file: str = "{ticker}_raw.csv"

@@ -166,6 +166,63 @@ class MACDIndicator(Indicator):
             return pd.Series(False, index=df.index)
         return df["macd"].fillna(0) > df["macd_signal"].fillna(0)
 
+class PriceAboveVWAPIndicator(Indicator):
+    """
+    Bullish when Close > rolling VWAP (20-bar).
+    Optionally requires a minimum positive deviation (default 0%).
+ 
+    Rationale: price trading above VWAP on above-average volume
+    indicates institutional buying pressure — classic momentum signal.
+    """
+    def __init__(self, min_deviation: float = 0.0):
+        self.min_deviation = min_deviation   # e.g. 0.002 = must be 0.2% above
+ 
+    @property
+    def name(self): return "price_above_vwap"
+ 
+    def compute(self, df: pd.DataFrame) -> pd.Series:
+        if "vwap_deviation" in df.columns:
+            return df["vwap_deviation"].fillna(0) > self.min_deviation
+        if "vwap_20" in df.columns:
+            return df["Close"] > df["vwap_20"]
+        # Fallback: compute VWAP on the fly
+        tp   = (df["High"] + df["Low"] + df["Close"]) / 3.0
+        vwap = (tp * df["Volume"]).rolling(20).sum() / (df["Volume"].rolling(20).sum() + 1e-10)
+        logger.debug("[VWAP] Computing VWAP on the fly (vwap_20 column missing).")
+        return df["Close"] > vwap
+ 
+ 
+class LowATRIndicator(Indicator):
+    """
+    Bullish when ATR% is below a threshold — confirms low-volatility
+    environment where trend-following signals have higher reliability.
+ 
+    Default threshold = 2.5% of price (ATR/Close < 0.025).
+    Pair with ADX > 25 to distinguish trending low-vol from ranging low-vol.
+    """
+    def __init__(self, max_atr_pct: float = 0.025):
+        self.max_atr_pct = max_atr_pct
+ 
+    @property
+    def name(self): return "low_atr"
+ 
+    def compute(self, df: pd.DataFrame) -> pd.Series:
+        # Prefer the pre-computed normalised column
+        if "atr_pct" in df.columns:
+            return df["atr_pct"].fillna(0.03) < self.max_atr_pct
+        if "atr_14" in df.columns:
+            return (df["atr_14"] / (df["Close"] + 1e-10)).fillna(0.03) < self.max_atr_pct
+        # Fallback: compute ATR on the fly
+        high, low, close = df["High"], df["Low"], df["Close"]
+        prev_close = close.shift(1)
+        tr  = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1/14, adjust=False).mean()
+        logger.debug("[ATR] Computing ATR on the fly (atr_pct column missing).")
+        return (atr / (close + 1e-10)).fillna(0.03) < self.max_atr_pct
 
 # ─── Register all defaults ────────────────────
 IndicatorRegistry.register(MomentumIndicator())
@@ -175,7 +232,8 @@ IndicatorRegistry.register(ADXIndicator())
 IndicatorRegistry.register(PriceAboveEMAIndicator())
 IndicatorRegistry.register(RSIIndicator())
 IndicatorRegistry.register(MACDIndicator())
-
+IndicatorRegistry.register(PriceAboveVWAPIndicator())   # ← ADD
+IndicatorRegistry.register(LowATRIndicator())            # ← ADD
 
 # ─────────────────────────────────────────────
 # Signal Engine

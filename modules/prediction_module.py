@@ -41,6 +41,11 @@ DEFAULT_FEATURE_COLS = [
     "price_above_ema50",
     "regime_state",
     "garch_vol",
+    # ── NEW FEATURES ──────────────────── ← these four lines
+    "atr_14",            # raw ATR in price units
+    "atr_pct",           # normalised ATR (cross-asset comparable)
+    "vwap_20",           # VWAP price level
+    "vwap_deviation",    # % deviation from VWAP (mean-reversion signal)    
 ]
 
 

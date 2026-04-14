@@ -99,6 +99,32 @@ def _feat_rsi(df):
 def _feat_adx(df):
     return (df["adx"].fillna(25).values / 100.0)
 
+@HMMFeatureRegistry.register("atr_norm")
+def _feat_atr_norm(df):
+    """Normalised ATR: already dimensionless (ATR/Close), no further scaling."""
+    if "atr_norm" in df.columns:
+        return df["atr_norm"].fillna(0.01).values
+    # Fallback: compute on the fly if column not present
+    high, low, close = df["High"], df["Low"], df["Close"]
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1/14, adjust=False).mean()
+    return (atr / (close + 1e-10)).fillna(0.01).values
+  
+@HMMFeatureRegistry.register("vwap_deviation")
+def _feat_vwap_dev(df):
+    """VWAP deviation: already a fraction — clip to ±20% to limit outliers."""
+    if "vwap_deviation" in df.columns:
+        return df["vwap_deviation"].fillna(0).clip(-0.2, 0.2).values
+    # Fallback
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    vwap = (tp * df["Volume"]).rolling(20).sum() / (df["Volume"].rolling(20).sum() + 1e-10)
+    dev  = (df["Close"] - vwap) / (vwap + 1e-10)
+    return dev.fillna(0).clip(-0.2, 0.2).values
 
 # ─────────────────────────────────────────────
 # Market Regime Module
@@ -121,6 +147,8 @@ class MarketRegimeModule:
         "volume_ratio",
         "momentum_10",
         "rsi_14",
+        "atr_norm",          # ← volatility character of each regime
+        "vwap_deviation",    # ← mean-reversion vs momentum signal per regi        
     ]
 
     def __init__(

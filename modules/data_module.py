@@ -232,7 +232,77 @@ def feat_price_ema(df):
     df["price_above_ema50"] = (df["Close"] > df["ema_50"]).astype(int)
     return df
 
+# ──────────────────────────────────────────────────────────────────────────
+# VWAP  (Volume-Weighted Average Price)
+# ──────────────────────────────────────────────────────────────────────────
+# VWAP = cumulative(price × volume) / cumulative(volume)
+# We compute a rolling 20-bar VWAP (intraday anchoring is not possible on
+# daily data; a rolling window is the standard daily-bar equivalent).
+#
+# Derived columns produced:
+#   vwap_20           — rolling 20-bar VWAP price level
+#   vwap_deviation    — (Close - vwap_20) / vwap_20  →  % above/below VWAP
+#   price_above_vwap  — 1 when Close > vwap_20, else 0  (binary flag)
+# ──────────────────────────────────────────────────────────────────────────
+@FeatureEngineer.register("vwap")
+def feat_vwap(df):
+    """
+    Rolling 20-bar VWAP and deviation from VWAP.
+ 
+    Typical price (tp) = (High + Low + Close) / 3
+    VWAP(20)           = sum(tp * Volume, 20) / sum(Volume, 20)
+    vwap_deviation     = (Close - vwap_20) / vwap_20
+    price_above_vwap   = binary flag
+    """
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    cumulative_tp_vol = (tp * df["Volume"]).rolling(window=20).sum()
+    cumulative_vol    = df["Volume"].rolling(window=20).sum()
+ 
+    df["vwap_20"]          = cumulative_tp_vol / (cumulative_vol + 1e-10)
+    df["vwap_deviation"]   = (df["Close"] - df["vwap_20"]) / (df["vwap_20"] + 1e-10)
+    df["price_above_vwap"] = (df["Close"] > df["vwap_20"]).astype(int)
+    return df
 
+# ──────────────────────────────────────────────────────────────────────────
+# ATR  (Average True Range)
+# ──────────────────────────────────────────────────────────────────────────
+# True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
+# ATR(14)    = EMA_14(True Range)   [Wilder's smoothing]
+#
+# Derived columns produced:
+#   atr_14        — raw 14-period ATR in price units
+#   atr_pct       — ATR / Close  →  normalised (%) — better for cross-asset
+#   atr_norm      — same as atr_pct, alias used by HMM and XGBoost features
+#   atr_bands_upper/lower — Close ± 2*ATR  (volatility envelope)
+# ──────────────────────────────────────────────────────────────────────────
+@FeatureEngineer.register("atr")
+def feat_atr(df):
+    """
+    ATR-14 (Wilder's smoothing), percentage ATR, and ATR-based price bands.
+ 
+    atr_14            — ATR in price units
+    atr_pct / atr_norm — ATR / Close (dimensionless, cross-comparable)
+    atr_bands_upper   — Close + 2 * atr_14
+    atr_bands_lower   — Close - 2 * atr_14
+    """
+    high  = df["High"]
+    low   = df["Low"]
+    close = df["Close"]
+    prev_close = close.shift(1)
+ 
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+ 
+    # Wilder's smoothing = EMA with alpha = 1/period
+    df["atr_14"]          = tr.ewm(alpha=1/14, adjust=False).mean()
+    df["atr_pct"]         = df["atr_14"] / (close + 1e-10)
+    df["atr_norm"]        = df["atr_pct"]           # alias for HMM / XGB
+    df["atr_bands_upper"] = close + 2 * df["atr_14"]
+    df["atr_bands_lower"] = close - 2 * df["atr_14"]
+    return df
 # ─────────────────────────────────────────────
 # Data Module (Orchestrator)
 # ─────────────────────────────────────────────
