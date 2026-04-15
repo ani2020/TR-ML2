@@ -1,7 +1,7 @@
 """
 ML Trading System - Module Package
 """
-from modules.data_module import DataModule, YahooFinancePlugin, CSVPlugin, FeatureEngineer
+from modules.data_module import DataModule, DuckDBPlugin, YahooFinancePlugin, CSVPlugin, FeatureEngineer
 from modules.regime_module import MarketRegimeModule, REGIME_LABELS, REGIME_COLORS
 from modules.volatility_module import GARCHVolatilityModule
 from modules.prediction_module import PredictionModule
@@ -14,7 +14,7 @@ from modules.visualization_module import VisualizationModule
 from modules.logger_module import setup_logger, ResultsLogger
 
 __all__ = [
-    "DataModule", "YahooFinancePlugin", "CSVPlugin", "FeatureEngineer",
+    "DataModule", "DuckDBPlugin", "YahooFinancePlugin", "CSVPlugin", "FeatureEngineer",
     "MarketRegimeModule", "REGIME_LABELS", "REGIME_COLORS",
     "GARCHVolatilityModule",
     "PredictionModule",

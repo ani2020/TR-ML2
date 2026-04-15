@@ -23,7 +23,7 @@ class DataConfig:
 
 @dataclass
 class HMMConfig:
-    n_states: int = 3                          # up to 7 hidden states
+    n_states: int = 5                          # up to 7 hidden states
     n_iter: int = 200
     covariance_type: str = "full"
     random_state: int = 42
@@ -71,7 +71,7 @@ class XGBoostConfig:
 @dataclass
 class SignalConfig:
     # Minimum indicators that must agree (out of 7)
-    min_votes: int = 3
+    min_votes: int = 5
     total_indicators: int = 7
     # Indicator thresholds
     momentum_threshold: float = 0.01        # > 1%
@@ -113,7 +113,7 @@ class BacktestConfig:
 
 @dataclass
 class MetricsConfig:
-    risk_free_rate: float = 0.0738            # annualised
+    risk_free_rate: float = 0.04            # annualised
     trading_days: int = 252
 
 

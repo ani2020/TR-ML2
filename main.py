@@ -35,21 +35,22 @@ from modules.visualization_module import VisualizationModule
 
 
 DEFAULT_CONFIG = {
-    "symbol": "SPY",
-    "data_start": "2014-01-01",
-    "data_end": "2024-01-01",
-    "hmm_n_states": 5,
-    "hmm_n_iter": 200,
-    "min_votes": 5,
-    "exit_votes": 3,
-    "max_open_trades": 2,
-    "total_capital": 100_000,
+    "symbol":               "NIFTY",
+    "source":               "duckdb_futures",   # duckdb_futures | duckdb_index | duckdb_equity | yahoo
+    "data_start":           "2020-01-01",
+    "data_end":             "2026-04-13",
+    "hmm_n_states":         3, #5
+    "hmm_n_iter":           200,
+    "min_votes":            3, #5
+    "exit_votes":           3,
+    "max_open_trades":      2,
+    "total_capital":        100_000,
     "max_capital_per_trade": 10_000,
-    "trading_expense": 10.0,
-    "slippage_pct": 0.001,
-    "risk_free_rate": 0.02,
-    "use_xgb_filter": True,
-    "confidence_sizing": True,
+    "trading_expense":      10.0,
+    "slippage_pct":         0.001,
+    "risk_free_rate":       0.0738,
+    "use_xgb_filter":       True,
+    "confidence_sizing":    True,
 }
 
 
@@ -76,13 +77,16 @@ class MLTradingSystem:
         self.logger.info("=" * 70)
 
     def load_data(self, symbol: str = None, start: str = None, end: str = None,
-                  force_refresh: bool = False) -> pd.DataFrame:
+                  source: str = None, force_refresh: bool = False) -> pd.DataFrame:
         symbol = symbol or self.config["symbol"]
         start  = start  or self.config["data_start"]
         end    = end    or self.config["data_end"]
-        self.logger.info(f"[Main] Loading data: {symbol} | {start} → {end}")
-        df = self.data_module.get_feature_data(symbol=symbol, start=start, end=end,
-                                               source="yahoo", force_refresh=force_refresh)
+        source = source or self.config.get("source", "duckdb_futures")
+        self.logger.info(f"[Main] Loading data: {symbol} | {start} → {end} | source={source}")
+        df = self.data_module.get_feature_data(
+            symbol=symbol, start=start, end=end,
+            source=source, force_refresh=force_refresh
+        )
         assert_dataframe(df, "feature_df", ["Close", "returns", "log_returns"])
         self.logger.info(f"[Main] Data loaded: {len(df)} bars, {len(df.columns)} features")
         debug_dataframe_snapshot(df, "feature_df")
@@ -245,12 +249,15 @@ class MLTradingSystem:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="ML Trading System")
-    parser.add_argument("--mode", choices=["single", "backtest", "grid"], default="single")
-    parser.add_argument("--symbol", default="SPY")
-    parser.add_argument("--years", type=int, default=10)
+    parser.add_argument("--mode",   choices=["single", "backtest", "grid"], default="single")
+    parser.add_argument("--symbol", default="NIFTY")
+    parser.add_argument("--source", default="duckdb_futures",
+                        choices=["duckdb_futures", "duckdb_index", "duckdb_equity", "yahoo"],
+                        help="Data source (default: duckdb_futures)")
+    parser.add_argument("--years",   type=int,   default=10)
     parser.add_argument("--capital", type=float, default=100_000)
-    parser.add_argument("--states", type=int, default=5)
-    parser.add_argument("--votes", type=int, default=5)
+    parser.add_argument("--states",  type=int,   default=5)
+    parser.add_argument("--votes",   type=int,   default=5)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--no-xgb", action="store_true")
     return parser.parse_args()
@@ -262,16 +269,17 @@ def main():
     start_date = (datetime.now() - timedelta(days=365 * args.years)).strftime("%Y-%m-%d")
 
     config = {
-        "symbol": args.symbol,
-        "data_start": start_date,
-        "data_end": end_date,
-        "hmm_n_states": args.states,
-        "total_capital": args.capital,
-        "min_votes": args.votes,
-        "use_xgb_filter": not args.no_xgb,
+        "symbol":          args.symbol,
+        "source":          args.source,
+        "data_start":      start_date,
+        "data_end":        end_date,
+        "hmm_n_states":    args.states,
+        "total_capital":   args.capital,
+        "min_votes":       args.votes,
+        "use_xgb_filter":  not args.no_xgb,
     }
     system = MLTradingSystem(config=config)
-    df = system.load_data(force_refresh=args.refresh)
+    df = system.load_data(source=args.source, force_refresh=args.refresh)
 
     if args.mode == "single":
         result = system.run_single_analysis(df, title=f"{args.symbol} Full Analysis")

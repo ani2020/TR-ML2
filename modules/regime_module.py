@@ -120,11 +120,96 @@ def _feat_vwap_dev(df):
     """VWAP deviation: already a fraction — clip to ±20% to limit outliers."""
     if "vwap_deviation" in df.columns:
         return df["vwap_deviation"].fillna(0).clip(-0.2, 0.2).values
-    # Fallback
-    tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    # Fallback: compute on the fly
+    tp   = (df["High"] + df["Low"] + df["Close"]) / 3.0
     vwap = (tp * df["Volume"]).rolling(20).sum() / (df["Volume"].rolling(20).sum() + 1e-10)
     dev  = (df["Close"] - vwap) / (vwap + 1e-10)
     return dev.fillna(0).clip(-0.2, 0.2).values
+
+# ── New HMM features: VIX ─────────────────────────────────────────────────
+
+@HMMFeatureRegistry.register("vix_level")
+def _feat_vix_level(df):
+    """Raw VIX level — normalised to [0,1] over rolling 252-day window."""
+    if "vix_level" not in df.columns:
+        return np.zeros(len(df))
+    vix = df["vix_level"].ffill().fillna(15.0)
+    # Robust normalisation: scale by rolling max to keep in [0,1] range
+    roll_max = vix.rolling(252, min_periods=60).max().fillna(vix.expanding().max())
+    return (vix / (roll_max + 1e-10)).values
+
+@HMMFeatureRegistry.register("vix_change")
+def _feat_vix_change(df):
+    """VIX log return — clipped to ±30% to limit outlier influence on HMM."""
+    if "vix_change" not in df.columns:
+        return np.zeros(len(df))
+    return df["vix_change"].fillna(0).clip(-0.3, 0.3).values
+
+@HMMFeatureRegistry.register("vix_percentile")
+def _feat_vix_pct(df):
+    """VIX 252-day percentile rank (0–1). High = elevated fear environment."""
+    if "vix_percentile_252" not in df.columns:
+        return np.full(len(df), 0.5)
+    return (df["vix_percentile_252"].fillna(50.0) / 100.0).values
+
+@HMMFeatureRegistry.register("vix_regime")
+def _feat_vix_regime(df):
+    """Binary: 1 when VIX > 20 (high-vol), 0 otherwise."""
+    if "vix_regime" not in df.columns:
+        return np.zeros(len(df))
+    return df["vix_regime"].fillna(0).values
+
+# ── New HMM features: Futures ─────────────────────────────────────────────
+
+@HMMFeatureRegistry.register("fut_log_ret")
+def _feat_fut_ret(df):
+    """Futures log return — primary return signal for the continuous series."""
+    if "fut_log_ret" in df.columns:
+        return df["fut_log_ret"].fillna(0).values
+    return np.log(df["Close"] / df["Close"].shift(1)).fillna(0).values
+
+@HMMFeatureRegistry.register("fut_zscore")
+def _feat_fut_zscore(df):
+    """20-day z-score of futures log return — normalised momentum."""
+    if "fut_zscore_20" not in df.columns:
+        lr  = np.log(df["Close"] / df["Close"].shift(1))
+        mu  = lr.rolling(20).mean()
+        sd  = lr.rolling(20).std()
+        return ((lr - mu) / (sd + 1e-10)).fillna(0).clip(-3, 3).values
+    return df["fut_zscore_20"].fillna(0).clip(-3, 3).values
+
+@HMMFeatureRegistry.register("basis_pct")
+def _feat_basis(df):
+    """Futures basis as % of spot — cost of carry / market sentiment proxy."""
+    if "basis_pct" in df.columns:
+        return df["basis_pct"].fillna(0).clip(-0.05, 0.05).values
+    if "BasisPct" in df.columns:
+        return df["BasisPct"].fillna(0).clip(-0.05, 0.05).values
+    return np.zeros(len(df))
+
+@HMMFeatureRegistry.register("ret_divergence")
+def _feat_ret_div(df):
+    """Futures − spot return divergence — signals basis-driven moves."""
+    if "ret_divergence" not in df.columns:
+        return np.zeros(len(df))
+    return df["ret_divergence"].fillna(0).clip(-0.05, 0.05).values
+
+# ── New HMM features: OI ─────────────────────────────────────────────────
+
+@HMMFeatureRegistry.register("oi_zscore")
+def _feat_oi_zscore(df):
+    """20-day z-score of OI log change — unusual positioning signal."""
+    if "oi_zscore_20" not in df.columns:
+        return np.zeros(len(df))
+    return df["oi_zscore_20"].fillna(0).clip(-3, 3).values
+
+@HMMFeatureRegistry.register("trend_strength")
+def _feat_trend_strength(df):
+    """Price × OI trend confirmation: +1 trending, −1 exhausting, 0 diverging."""
+    if "trend_strength" not in df.columns:
+        return np.zeros(len(df))
+    return df["trend_strength"].fillna(0).values
+
 
 # ─────────────────────────────────────────────
 # Market Regime Module
@@ -142,13 +227,25 @@ class MarketRegimeModule:
     """
 
     DEFAULT_FEATURES = [
-        "log_returns",
-        "volatility_20",
-        "volume_ratio",
-        "momentum_10",
-        "rsi_14",
-        "atr_norm",          # ← volatility character of each regime
-        "vwap_deviation",    # ← mean-reversion vs momentum signal per regi        
+        # ── Core price / vol ──────────────────────────────────────
+        "log_returns",       # primary return signal
+        "volatility_20",     # realised vol (HV)
+        "momentum_10",       # medium-term momentum
+        "volume_ratio",      # volume conviction
+        # ── Technical ─────────────────────────────────────────────
+        "rsi_14",            # overbought / oversold
+        "atr_norm",          # volatility character of each regime
+        "vwap_deviation",    # mean-reversion vs momentum
+        # ── VIX / macro ───────────────────────────────────────────
+        "vix_level",         # fear gauge level (normalised)
+        "vix_change",        # day-over-day VIX move
+        "vix_percentile",    # where VIX sits in its own history
+        # ── Futures-specific ──────────────────────────────────────
+        "fut_zscore",        # normalised futures momentum
+        "basis_pct",         # cost of carry / sentiment
+        # ── OI / positioning ──────────────────────────────────────
+        "oi_zscore",         # unusual OI build-up signal
+        "trend_strength",    # price × OI confirmation
     ]
 
     def __init__(

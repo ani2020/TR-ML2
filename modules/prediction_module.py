@@ -27,10 +27,12 @@ DEFAULT_XGB_PARAMS = {
 
 # Default feature columns used for XGBoost
 DEFAULT_FEATURE_COLS = [
+    # ── Core price / returns ──────────────────────────────────────
     "returns",
     "log_returns",
     "volatility_20",
     "momentum_10",
+    # ── Technical indicators ──────────────────────────────────────
     "rsi_14",
     "macd",
     "macd_signal",
@@ -39,13 +41,41 @@ DEFAULT_FEATURE_COLS = [
     "volume_ratio",
     "bb_width",
     "price_above_ema50",
+    # ── ATR ───────────────────────────────────────────────────────
+    "atr_14",
+    "atr_pct",
+    # ── VWAP ──────────────────────────────────────────────────────
+    "vwap_20",
+    "vwap_deviation",
+    # ── Regime / vol model outputs ────────────────────────────────
     "regime_state",
     "garch_vol",
-    # ── NEW FEATURES ──────────────────── ← these four lines
-    "atr_14",            # raw ATR in price units
-    "atr_pct",           # normalised ATR (cross-asset comparable)
-    "vwap_20",           # VWAP price level
-    "vwap_deviation",    # % deviation from VWAP (mean-reversion signal)    
+    # ── VIX features ──────────────────────────────────────────────
+    "vix_level",
+    "vix_returns",
+    "vix_change",
+    "vix_vs_sma20",
+    "vix_percentile_252",
+    "vix_regime",
+    "vix_divergence",
+    "fut_price_vix_sig",
+    # ── Futures-specific features ─────────────────────────────────
+    "fut_log_ret",
+    "fut_ret_5d_vol",
+    "fut_ret_10d_vol",
+    "fut_ret_20d_vol",
+    "fut_zscore_20",
+    "ret_divergence",
+    "basis_pct",
+    "dte_norm",
+    "roll_vol_20",
+    "roll_vol_60",
+    # ── OI / positioning features ─────────────────────────────────
+    "oi_log_change",
+    "oi_zscore_20",
+    "fut_price_oi_sig",
+    "trend_strength",
+    "oi_vs_sma",
 ]
 
 
