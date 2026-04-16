@@ -149,23 +149,52 @@ class GARCHVolatilityModule:
 
         return pd.Series(cv, index=ret.index, name="garch_vol")
 
-    def add_to_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+    def add_to_dataframe(self, df: pd.DataFrame,
+                         returns_col: str = "returns") -> pd.DataFrame:
         """
-        Convenience: fit on df["returns"] and attach garch_vol column.
-        Also attaches garch_next_vol (scalar broadcast for reference).
+        Fit GARCH on a return series and attach garch_vol + garch_next_vol.
+
+        Parameters
+        ----------
+        df          : Feature DataFrame.
+        returns_col : Column to fit GARCH on. Use 'fut_log_ret' when working
+                      with the continuous futures series (recommended — futures
+                      returns reflect actual traded volatility without roll gaps).
+                      Defaults to 'returns' for backward compatibility.
         """
         df = df.copy()
-        if "returns" not in df.columns:
-            raise ValueError("DataFrame must have 'returns' column")
-        self.fit(df["returns"])
-        garch_series = self.predict_series(df["returns"])
+
+        # Resolve column: fall back gracefully with a warning if not found
+        if returns_col not in df.columns:
+            fallback = next(
+                (c for c in ("returns", "log_returns", "fut_log_ret") if c in df.columns),
+                None
+            )
+            if fallback is None:
+                raise ValueError(
+                    f"[GARCH] '{returns_col}' not found and no fallback available. "
+                    f"DataFrame columns: {list(df.columns)}"
+                )
+            logger.warning(
+                f"[GARCH] '{returns_col}' not found — falling back to '{fallback}'. "
+                f"Ensure futures_features has been computed before GARCH."
+            )
+            returns_col = fallback
+
+        logger.info(f"[GARCH] Fitting on column: '{returns_col}'")
+        self.fit(df[returns_col])
+        garch_series = self.predict_series(df[returns_col])
+
         # Drop existing garch columns so join never raises overlap error
         for _col in ["garch_vol", "garch_next_vol"]:
             if _col in df.columns:
                 df.drop(columns=[_col], inplace=True)
         df = df.join(garch_series, how="left")
         df["garch_next_vol"] = self.forecast_next()
-        logger.info(f"[GARCH] Added garch_vol to DataFrame. Next-period vol: {df['garch_next_vol'].iloc[-1]:.4f}")
+        logger.info(
+            f"[GARCH] Added garch_vol (fitted on '{returns_col}'). "
+            f"Next-period vol: {df['garch_next_vol'].iloc[-1]:.4f}"
+        )
         return df
 
     @property

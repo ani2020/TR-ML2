@@ -37,8 +37,11 @@ class BacktestWindow:
 class BacktestConfig:
     # HMM
     hmm_n_states: int = 5
-    hmm_features: Optional[List[str]] = None
+    hmm_features: Optional[List[str]] = None  # None = MarketRegimeModule.DEFAULT_FEATURES
     hmm_n_iter: int = 200
+
+    # GARCH
+    garch_returns_col: str = "fut_log_ret"  # "fut_log_ret" for futures, "returns" for spot
 
     # XGBoost
     xgb_params: Optional[Dict] = None
@@ -156,11 +159,20 @@ class Backtester:
             test_df  = self.df.loc[window.test_start:window.test_end].copy()
 
             assert_dataframe(train_df, "train_df", ["Close", "returns", "log_returns"])
-            assert_dataframe(test_df, "test_df", ["Close", "returns"])
+            assert_dataframe(test_df,  "test_df",  ["Close", "returns"])
             logger.info(f"[Backtest] Train: {len(train_df)} bars | Test: {len(test_df)} bars")
 
-            # ── ii. Train HMM ─────────────────
-            logger.info("[Backtest] Step 1: Training HMM...")
+            # ── ii. Fit GARCH first ───────────
+            # Must run before HMM so garch_vol is available as an HMM feature.
+            logger.info(f"[Backtest] Step 1: Fitting GARCH on '{self.config.garch_returns_col}'...")
+            garch = GARCHVolatilityModule()
+            train_df = garch.add_to_dataframe(train_df,
+                                              returns_col=self.config.garch_returns_col)
+            test_df  = garch.add_to_dataframe(test_df,
+                                              returns_col=self.config.garch_returns_col)
+
+            # ── iii. Train HMM ────────────────
+            logger.info("[Backtest] Step 2: Training HMM...")
             hmm = MarketRegimeModule(
                 n_states=self.config.hmm_n_states,
                 features=self.config.hmm_features,
@@ -168,15 +180,9 @@ class Backtester:
             )
             hmm.fit(train_df)
 
-            # ── iii. Train GARCH ──────────────
-            logger.info("[Backtest] Step 2: Fitting GARCH...")
-            garch = GARCHVolatilityModule()
-            garch.fit(train_df["returns"])
-
             # ── iv. Train XGBoost ─────────────
-            logger.info("[Backtest] Step 3: Adding regimes + GARCH to train data...")
+            logger.info("[Backtest] Step 3: Adding regimes to train data...")
             train_enriched = hmm.predict(train_df)
-            train_enriched = garch.add_to_dataframe(train_enriched)
 
             logger.info("[Backtest] Step 4: Training XGBoost...")
             xgb = PredictionModule(
@@ -188,7 +194,6 @@ class Backtester:
             # ── v. Predict on test ────────────
             logger.info("[Backtest] Step 5: Predicting on test data...")
             test_enriched = hmm.predict(test_df)
-            test_enriched = garch.add_to_dataframe(test_enriched)
             test_enriched = xgb.predict(test_enriched)
 
             debug_dataframe_snapshot(test_enriched, "test_enriched", n=3)

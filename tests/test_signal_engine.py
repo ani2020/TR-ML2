@@ -90,7 +90,7 @@ class TestIndividualIndicators:
         assert result.mean() < 0.05, "High threshold should barely fire"
 
     def test_momentum_low_threshold_fires_often(self, df):
-        """MomentumIndicator with threshold=−1 (always true) should fire always."""
+        """MomentumIndicator with threshold=-1 (always true) should fire always."""
         ind    = MomentumIndicator(threshold=-1.0)
         result = ind.compute(df)
         assert result.mean() > 0.95, "Low threshold should fire almost always"

@@ -151,11 +151,11 @@ class TestFeatureEngineer:
         FeatureEngineer.FEATURE_REGISTRY.pop("_bad_feature_test", None)
 
     def test_macd_signal_relationship(self):
-        """MACD histogram = MACD line − Signal line."""
+        """MACD histogram = MACD line - Signal line."""
         df  = _base_ohlcv(300)
         out = FeatureEngineer.compute(df.copy())
         residual = (out["macd"] - out["macd_signal"] - out["macd_hist"]).abs()
-        assert residual.max() < 1e-8, "MACD hist ≠ MACD − Signal"
+        assert residual.max() < 1e-8, "MACD hist ≠ MACD - Signal"
 
     def test_volume_ratio_near_one_on_average(self):
         """volume_ratio should average close to 1 (volume / rolling mean volume)."""

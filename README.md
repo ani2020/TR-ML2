@@ -390,7 +390,7 @@ print(best["best_params"])   # {"hmm_n_states": 5, "min_votes": 5, ...}
 print(best["best_score"])
 ```
 
-**Composite score** = 0.4 × Sharpe + 0.3 × CAGR + 0.2 × Calmar − 0.1 × |MaxDD|
+**Composite score** = 0.4 × Sharpe + 0.3 × CAGR + 0.2 × Calmar - 0.1 × |MaxDD|
 
 **Output files:**
 - `results/grid/grid_summary.json` — all runs ranked, full params + metrics

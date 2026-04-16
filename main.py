@@ -37,17 +37,39 @@ from modules.visualization_module import VisualizationModule
 DEFAULT_CONFIG = {
     "symbol":               "NIFTY",
     "source":               "duckdb_futures",   # duckdb_futures | duckdb_index | duckdb_equity | yahoo
-    "data_start":           "2020-01-01",
+    "data_start":           "2015-01-01",
     "data_end":             "2026-04-13",
-    "hmm_n_states":         3, #5
+    "hmm_n_states":         5,
     "hmm_n_iter":           200,
-    "min_votes":            3, #5
-    "exit_votes":           3,
+    "hmm_features":         ["fut_log_ret", "garch_vol",  "basis_pct", "vix_change"],   # None = use MarketRegimeModule.DEFAULT_FEATURES ["fut_log_ret", "garch_vol",  "basis_pct", "vix_change"]
+                                    # Override: ["log_returns", "garch_vol", "vix_level", ...]
+    "garch_returns_col":    "fut_log_ret",  # Column GARCH fits on.
+                                            # "fut_log_ret" for futures (recommended)
+                                            # "returns" for spot / index / equity
+    # ── Signal voting ──────────────────────────────────────────────────
+    # Indicators used and rationale for futures source:
+    #   REMOVED: low_volatility — votes against high-vol trending moves (worst
+    #            time to sit out on futures)
+    #   REMOVED: low_atr       — same issue; ATR expands in breakouts
+    #   REMOVED: volume        — futures contract volume is unreliable across
+    #            rollover boundaries in a continuous series
+    #   KEPT:    momentum, adx, price_above_ema, rsi, macd, price_above_vwap
+    #            — all computed on adj_close (futures prices) and relevant
+    #
+    # min_votes reduced 5→3 because:
+    #   - 9 indicators → 6 after removals; 5/9 ≈ 55% vs 3/6 = 50% (same bar)
+    #   - HMM + XGBoost already filter aggressively; voting is a sanity check
+    #     not a primary filter
+    #
+    # Set min_votes=0 to disable voting entirely (rely solely on HMM + XGBoost)
+    "signal_indicators":    ["rsi", "price_above_vwap"], #["momentum", "adx", "price_above_ema", "rsi", "macd", "price_above_vwap"]
+    "min_votes":            3,      # out of 6 active indicators
+    "exit_votes":           3,      # exit when fewer than 2 agree
     "max_open_trades":      2,
-    "total_capital":        100_000,
-    "max_capital_per_trade": 10_000,
-    "trading_expense":      10.0,
-    "slippage_pct":         0.001,
+    "total_capital":        100_000_000,
+    "max_capital_per_trade": 100_000,
+    "trading_expense":      100.0,
+    "slippage_pct":         0.03,
     "risk_free_rate":       0.0738,
     "use_xgb_filter":       True,
     "confidence_sizing":    True,
@@ -96,17 +118,19 @@ class MLTradingSystem:
         """Run the complete ML pipeline on a single DataFrame."""
         self.logger.info(f"[Main] Single analysis: {df.index[0].date()} → {df.index[-1].date()}")
 
-        # 1. HMM
-        self.logger.info("[Main] Step 1/6: Market Regime Detection (HMM)...")
+        # 1. GARCH  — must run first so garch_vol is available as HMM feature
+        self.logger.info("[Main] Step 1/6: GARCH Volatility Model...")
+        garch = GARCHVolatilityModule()
+        garch_col = self.config.get("garch_returns_col", "fut_log_ret")
+        df = garch.add_to_dataframe(df, returns_col=garch_col)
+
+        # 2. HMM — now has garch_vol + garch_next_vol available as features
+        self.logger.info("[Main] Step 2/6: Market Regime Detection (HMM)...")
         hmm = MarketRegimeModule(n_states=self.config["hmm_n_states"],
-                                  n_iter=self.config["hmm_n_iter"])
+                                  n_iter=self.config["hmm_n_iter"],
+                                  features=self.config.get("hmm_features"))
         hmm.fit(df)
         df = hmm.predict(df)
-
-        # 2. GARCH
-        self.logger.info("[Main] Step 2/6: GARCH Volatility Model...")
-        garch = GARCHVolatilityModule()
-        df = garch.add_to_dataframe(df)
 
         # 3. XGBoost
         self.logger.info("[Main] Step 3/6: XGBoost Prediction...")
@@ -117,6 +141,7 @@ class MLTradingSystem:
         # 4. Signals
         self.logger.info("[Main] Step 4/6: Signal Generation...")
         engine = SignalEngine(
+            indicator_names=self.config.get("signal_indicators"),  # None = all registered
             min_votes=self.config["min_votes"],
             exit_votes=self.config["exit_votes"],
             max_open_trades=self.config["max_open_trades"],
@@ -255,7 +280,7 @@ def parse_args():
                         choices=["duckdb_futures", "duckdb_index", "duckdb_equity", "yahoo"],
                         help="Data source (default: duckdb_futures)")
     parser.add_argument("--years",   type=int,   default=10)
-    parser.add_argument("--capital", type=float, default=100_000)
+    parser.add_argument("--capital", type=float, default=100_000_000)
     parser.add_argument("--states",  type=int,   default=5)
     parser.add_argument("--votes",   type=int,   default=5)
     parser.add_argument("--refresh", action="store_true")

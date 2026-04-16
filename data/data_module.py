@@ -511,7 +511,7 @@ def feat_vwap(df):
     """
     Rolling 20-bar VWAP, deviation, and binary flag.
     vwap_20          — rolling VWAP price level
-    vwap_deviation   — (Close − vwap_20) / vwap_20
+    vwap_deviation   — (Close - vwap_20) / vwap_20
     price_above_vwap — 1 when Close > vwap_20
     """
     tp  = (df["High"] + df["Low"] + df["Close"]) / 3.0
@@ -558,7 +558,7 @@ def feat_vix(df):
     vix_returns        — log(vix_close / vix_prev_close)
     vix_change         — alias of vix_returns (used by HMM registry)
     vix_sma20          — 20-day SMA of VIX
-    vix_vs_sma20       — vix_level / vix_sma20 − 1  (above/below trend)
+    vix_vs_sma20       — vix_level / vix_sma20 - 1  (above/below trend)
     vix_percentile_252 — rolling 252-day percentile rank  (0–100)
     vix_regime         — 1 when VIX > 20 (high-vol environment)
     vix_divergence     — vix_returns + fut_log_ret  (cross-asset divergence)
@@ -622,9 +622,9 @@ def feat_futures(df):
     fut_ret_5d_vol     — 5-day rolling annualised vol of fut_log_ret
     fut_ret_10d_vol    — 10-day rolling annualised vol
     fut_ret_20d_vol    — 20-day rolling annualised vol
-    fut_zscore_20      — (fut_log_ret − 20d mean) / 20d std
-    ret_divergence     — fut_log_ret − spot_log_ret
-    basis_pct          — (futures − spot) / spot  (pass-through from DuckDB)
+    fut_zscore_20      — (fut_log_ret - 20d mean) / 20d std
+    ret_divergence     — fut_log_ret - spot_log_ret
+    basis_pct          — (futures - spot) / spot  (pass-through from DuckDB)
     dte_norm           — days-to-expiry / 30  (pass-through)
     roll_vol_20/60     — realised vol from continuous series (pass-through)
     """
@@ -644,7 +644,7 @@ def feat_futures(df):
     sd20 = lr.rolling(20).std()
     df["fut_zscore_20"] = (lr - mu20) / (sd20 + 1e-10)
 
-    # Return divergence: futures log return − spot log return
+    # Return divergence: futures log return - spot log return
     if "SpotRet" in df.columns:
         df["ret_divergence"] = lr - df["SpotRet"].fillna(0)
     elif "Spot" in df.columns:
@@ -678,10 +678,10 @@ def feat_oi(df):
     fut_price_oi_sig   — fut_log_ret × oi_log_change  (price × OI interaction)
     trend_strength     — sign(fut_log_ret) × sign(oi_log_change)
                          +1 = price↑ & OI↑  (trend confirmation)
-                         −1 = price↓ & OI↓  (short covering / weak demand)
+                         -1 = price↓ & OI↓  (short covering / weak demand)
                           0 = divergence
     oi_sma_20          — 20-day SMA of raw OI
-    oi_vs_sma          — OI / oi_sma_20 − 1  (OI expansion / contraction)
+    oi_vs_sma          — OI / oi_sma_20 - 1  (OI expansion / contraction)
     """
     if "FutOI" not in df.columns:
         logger.warning("[Features] FutOI not in DataFrame — OI features will be NaN")

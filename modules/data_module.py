@@ -385,6 +385,20 @@ class FeatureEngineer:
 
     @classmethod
     def compute(cls, df: pd.DataFrame, features: Optional[list] = None) -> pd.DataFrame:
+        """
+        Compute all registered feature functions and return enriched DataFrame.
+
+        dropna strategy
+        ---------------
+        The final dropna() only considers columns that are actually used by
+        models (HMM + XGBoost feature lists).  Intermediate computation
+        columns (sma_20, sma_50, ema_50, volume_sma_20, bb_upper/lower,
+        di_plus/minus, atr_bands_*, etc.) are kept even if they have NaN
+        in early warmup rows, so those rows survive into the model pipeline.
+
+        This prevents losing ~30-60% of data due to warmup NaNs in columns
+        that are never actually used as model inputs.
+        """
         out = df.copy()
         selected = features or list(cls.FEATURE_REGISTRY.keys())
         for fname in selected:
@@ -396,7 +410,57 @@ class FeatureEngineer:
                     logger.warning(f"[Features] Failed to compute {fname}: {e}")
             else:
                 logger.warning(f"[Features] Unknown feature: {fname}")
-        out.dropna(inplace=True)
+
+        # Columns that MUST be non-NaN for a row to be usable.
+        # These are either computed fresh from OHLCV (guaranteed after warmup)
+        # or critical model inputs with no fallback.
+        # 
+        # NOT included here (kept as features but row survival not required):
+        #   roll_vol_20  — pre-computed in DuckDB, NaN in first 20 rows of series
+        #   dte_norm     — pre-computed in DuckDB, NaN if spot data missing
+        #   basis_pct    — pre-computed in DuckDB, NaN if spot data missing
+        #   oi_zscore_20 — needs 20 rows of OI history; OI=0 at contract start
+        #   oi_vs_sma    — same dependency on OI history
+        #   ret_divergence — needs SpotRet from DuckDB, NaN on first row
+        #   vix_divergence / fut_price_vix_sig — NaN if fut_log_ret NaN
+        _REQUIRED_COLS = {
+            # Core returns — computed fresh, NaN only on row 1
+            "returns", "log_returns", "fut_log_ret",
+            # Vol — computed fresh from OHLCV after warmup
+            "atr_pct",
+            # Momentum / trend — computed fresh after warmup
+            "momentum_10", "fut_zscore_20", "macd", "macd_hist", "adx",
+            # Mean reversion — computed fresh after warmup
+            "rsi_14", "bb_width", "vwap_deviation",
+            # Volume — computed fresh after warmup
+            "volume_ratio",
+            # Trend filter — computed fresh
+            "price_above_ema50",
+            # VIX — joined from DuckDB with ffill; complete from 2015
+            "vix_level", "vix_returns", "vix_change",
+            "vix_percentile_252", "vix_regime",
+            # Realised vol — computed fresh
+            "volatility_20", "atr_norm",
+            # OI core — only log_change (NaN only on row 1 or OI=0 days)
+            "oi_log_change",
+            "trend_strength",
+            "fut_price_oi_sig",
+        }
+
+        drop_on = [c for c in _REQUIRED_COLS if c in out.columns]
+
+        rows_before = len(out)
+        out = out.dropna(subset=drop_on)
+        rows_after  = len(out)
+
+        if rows_before != rows_after:
+            logger.info(
+                f"[Features] dropna on {len(drop_on)} required columns: "
+                f"{rows_before} → {rows_after} rows "
+                f"({rows_before - rows_after} dropped, "
+                f"{rows_after/rows_before:.1%} retained)"
+            )
+
         return out
 
 
@@ -557,16 +621,21 @@ def feat_vix(df):
     vix_level          — India VIX close
     vix_returns        — log(vix_close / vix_prev_close)
     vix_change         — alias of vix_returns (used by HMM registry)
-    vix_sma20          — 20-day SMA of VIX
-    vix_vs_sma20       — vix_level / vix_sma20 − 1  (above/below trend)
     vix_percentile_252 — rolling 252-day percentile rank  (0–100)
+                         NOTE: requires 252 bars of VIX history; rows before
+                         that are filled with the expanding percentile so no
+                         rows are dropped due to this column
     vix_regime         — 1 when VIX > 20 (high-vol environment)
     vix_divergence     — vix_returns + fut_log_ret  (cross-asset divergence)
     fut_price_vix_sig  — vix_returns × fut_log_ret  (interaction signal)
+
+    NOT stored as columns (computed inline only, avoids NaN row loss):
+      vix_sma20, vix_vs_sma20 — rolling-20 intermediates; accessible via
+      vix_percentile_252 which captures the same positioning information
     """
     _vix_nan_cols = [
-        "vix_level", "vix_returns", "vix_change", "vix_sma20",
-        "vix_vs_sma20", "vix_percentile_252", "vix_regime",
+        "vix_level", "vix_returns", "vix_change",
+        "vix_percentile_252", "vix_regime",
         "vix_divergence", "fut_price_vix_sig",
     ]
 
@@ -583,17 +652,25 @@ def feat_vix(df):
     df["vix_returns"] = np.log(vix / (prev_vix + 1e-10))
     df["vix_change"]  = df["vix_returns"]   # HMM registry alias
 
-    df["vix_sma20"]    = vix.rolling(20).mean()
-    df["vix_vs_sma20"] = vix / (df["vix_sma20"] + 1e-10) - 1.0
+    # Rolling 252-day percentile rank.
+    # Use expanding window until 252 bars are available so early rows
+    # still get a value (expanding percentile) rather than NaN.
+    def _percentile_rank(x):
+        return pd.Series(x).rank(pct=True).iloc[-1] * 100
 
-    # Rolling 252-day percentile rank (where is today's VIX vs its own history?)
-    df["vix_percentile_252"] = (
-        vix.rolling(252, min_periods=60)
-        .apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100, raw=False)
-    )
+    rolling_pct = vix.rolling(252, min_periods=20).apply(_percentile_rank, raw=False)
+    # Fill early bars (< min_periods) with expanding percentile
+    expanding_pct = vix.expanding(min_periods=2).apply(_percentile_rank, raw=False)
+    df["vix_percentile_252"] = rolling_pct.fillna(expanding_pct)
+
     df["vix_regime"] = (vix > 20.0).astype(int)
 
-    # Determine which futures return column is available
+    # NOTE: vix_sma20 and vix_vs_sma20 are intentionally NOT stored as
+    # DataFrame columns. They require 20 VIX bars warmup and would add
+    # NaN rows that dropna() would remove. The positioning information
+    # they capture is already encoded in vix_percentile_252.
+
+    # Cross-asset features
     fut_ret = None
     for candidate in ("FutLogRet", "fut_log_ret", "log_returns"):
         if candidate in df.columns:
@@ -602,8 +679,8 @@ def feat_vix(df):
 
     if fut_ret is not None:
         vr = df["vix_returns"].fillna(0)
-        df["vix_divergence"]    = vr + fut_ret     # additive cross-asset spread
-        df["fut_price_vix_sig"] = vr * fut_ret     # interaction (same sign = risk-off)
+        df["vix_divergence"]    = vr + fut_ret
+        df["fut_price_vix_sig"] = vr * fut_ret
     else:
         df["vix_divergence"]    = np.nan
         df["fut_price_vix_sig"] = np.nan
@@ -690,7 +767,10 @@ def feat_oi(df):
             df[col] = np.nan
         return df
 
-    oi = df["FutOI"].replace(0, np.nan)
+    # Replace zero OI (new contract days) with NaN then forward-fill.
+    # OI is legitimately 0 only at the very start of a new contract before
+    # positions are built — ffill from the previous day is the right proxy.
+    oi = df["FutOI"].replace(0, np.nan).ffill(limit=5)
 
     raw_oi_chg          = np.log(oi / oi.shift(1))
     df["oi_log_change"] = raw_oi_chg.clip(-0.5, 0.5)

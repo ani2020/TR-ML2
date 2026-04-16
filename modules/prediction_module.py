@@ -11,70 +11,75 @@ from typing import List, Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_XGB_PARAMS = {
-    "n_estimators": 300,
-    "max_depth": 5,
-    "learning_rate": 0.05,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "min_child_weight": 3,
-    "reg_alpha": 0.1,
-    "reg_lambda": 1.0,
-    "use_label_encoder": False,
-    "eval_metric": "logloss",
-    "random_state": 42,
-    "n_jobs": -1,
+    "n_estimators":       300,
+    "max_depth":          4,        # reduced from 5 — limits overfitting with more features
+    "learning_rate":      0.05,
+    "subsample":          0.8,
+    "colsample_bytree":   0.6,      # reduced from 0.8 — each tree sees ~25/41 features
+                                    # forces diversity, prevents any one cluster dominating
+    "colsample_bylevel":  0.8,      # additional column sampling per depth level
+    "min_child_weight":   5,        # increased from 3 — requires more samples per leaf
+    "gamma":              0.1,      # min loss reduction to make a split
+    "reg_alpha":          0.1,      # L1 — drives weak features to zero importance
+    "reg_lambda":         2.0,      # L2 — increased from 1.0 for stronger weight shrinkage
+    "use_label_encoder":  False,
+    "eval_metric":        "logloss",
+    "random_state":       42,
+    "n_jobs":             -1,
 }
 
-# Default feature columns used for XGBoost
+# XGBoost feature columns
+# ─────────────────────────────────────────────────────────────────────────
+# Redundancy notes (kept intentionally lean):
+#   - vix_change removed  : identical to vix_returns (alias)
+#   - log_returns removed : nearly identical to returns for daily bars
+#   - fut_ret_5d/10d_vol removed : roll_vol_20 + garch_vol already cover vol
+#   - roll_vol_60 removed : high correlation with roll_vol_20
+#   - macd_signal removed : derivable from macd + macd_hist (collinear)
+#   - vwap_20 removed     : raw price level, vwap_deviation is the signal
+# ─────────────────────────────────────────────────────────────────────────
 DEFAULT_FEATURE_COLS = [
-    # ── Core price / returns ──────────────────────────────────────
+    # ── Core returns ──────────────────────────────────────────────
     "returns",
-    "log_returns",
-    "volatility_20",
+    "fut_log_ret",           # futures return — primary signal for futures source
+    # ── Volatility (3 representatives, not 7) ─────────────────────
+    "garch_vol",             # GARCH conditional vol — best single vol estimate
+    "atr_pct",               # intraday vol range (different from GARCH)
+    "roll_vol_20",           # realised vol of continuous series
+    # ── Momentum / trend ──────────────────────────────────────────
     "momentum_10",
-    # ── Technical indicators ──────────────────────────────────────
-    "rsi_14",
+    "fut_zscore_20",         # normalised futures momentum
     "macd",
-    "macd_signal",
-    "macd_hist",
+    "macd_hist",             # macd_signal is redundant (macd_hist = macd - signal)
     "adx",
-    "volume_ratio",
+    # ── Mean reversion ────────────────────────────────────────────
+    "rsi_14",
     "bb_width",
-    "price_above_ema50",
-    # ── ATR ───────────────────────────────────────────────────────
-    "atr_14",
-    "atr_pct",
-    # ── VWAP ──────────────────────────────────────────────────────
-    "vwap_20",
     "vwap_deviation",
-    # ── Regime / vol model outputs ────────────────────────────────
-    "regime_state",
-    "garch_vol",
-    # ── VIX features ──────────────────────────────────────────────
+    # ── Volume ────────────────────────────────────────────────────
+    "volume_ratio",
+    # ── Trend filter ──────────────────────────────────────────────
+    "price_above_ema50",
+    # ── Regime / model outputs ────────────────────────────────────
+    # regime_state intentionally excluded: regime_prob_* columns are
+    # appended automatically by _select_features() at runtime and are
+    # strictly better (soft probabilities vs hard integer label).
+    "garch_next_vol",        # forward-looking vol forecast
+    # ── VIX (5 features — level, change, position, regime, signal)
     "vix_level",
-    "vix_returns",
-    "vix_change",
-    "vix_vs_sma20",
+    "vix_returns",           # vix_change is an alias — kept only one
     "vix_percentile_252",
     "vix_regime",
-    "vix_divergence",
-    "fut_price_vix_sig",
-    # ── Futures-specific features ─────────────────────────────────
-    "fut_log_ret",
-    "fut_ret_5d_vol",
-    "fut_ret_10d_vol",
-    "fut_ret_20d_vol",
-    "fut_zscore_20",
-    "ret_divergence",
+    "fut_price_vix_sig",     # interaction: price × VIX direction
+    # ── Futures-specific ──────────────────────────────────────────
     "basis_pct",
     "dte_norm",
-    "roll_vol_20",
-    "roll_vol_60",
-    # ── OI / positioning features ─────────────────────────────────
+    "ret_divergence",        # futures - spot return spread
+    # ── OI / positioning ──────────────────────────────────────────
     "oi_log_change",
     "oi_zscore_20",
-    "fut_price_oi_sig",
-    "trend_strength",
+    "fut_price_oi_sig",      # interaction: price × OI direction
+    "trend_strength",        # sign(return) × sign(OI change)
     "oi_vs_sma",
 ]
 
@@ -110,13 +115,21 @@ class PredictionModule:
     # ── Feature Selection ─────────────────────
     def _select_features(self, df: pd.DataFrame) -> List[str]:
         available = [c for c in self.feature_cols if c in df.columns]
-        # Also include any regime_prob_ columns
+        # regime_prob_* columns are appended automatically — they are
+        # produced by MarketRegimeModule.predict() and are strictly better
+        # than the hard regime_state integer label.
         prob_cols = [c for c in df.columns if c.startswith("regime_prob_")]
         all_feats = list(dict.fromkeys(available + prob_cols))
+
         missing = set(self.feature_cols) - set(df.columns)
         if missing:
-            logger.debug(f"[XGB] Feature cols not in DataFrame: {missing}")
-        logger.info(f"[XGB] Using {len(all_feats)} features: {all_feats}")
+            logger.debug(f"[XGB] Feature cols not in DataFrame (skipped): {sorted(missing)}")
+
+        logger.info(
+            f"[XGB] Features: {len(available)} explicit + {len(prob_cols)} regime_prob_* "
+            f"= {len(all_feats)} total"
+        )
+        logger.debug(f"[XGB] Full feature list: {all_feats}")
         return all_feats
 
     # ── Build Target ──────────────────────────

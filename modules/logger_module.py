@@ -23,40 +23,59 @@ def setup_logger(
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB
     backup_count: int = 5,
 ) -> logging.Logger:
-    """Configure and return the root trading system logger."""
+    """
+    Configure logging for the entire ML trading system.
+
+    Why root logger gets the handlers
+    ----------------------------------
+    Every module uses logging.getLogger(__name__) which produces loggers
+    named e.g. 'modules.regime_module', 'modules.data_module' etc.
+    Their parent chain goes: modules.regime_module → root (NOT → ml_trading).
+
+    Attaching handlers only to 'ml_trading' means all module-level log
+    statements propagate to root and vanish because root has no handlers.
+
+    Fix: attach file + console handlers to root so every logger in the
+    process (modules.*, ml_trading, etc.) is captured in the same log file.
+    The named 'ml_trading' logger is returned for main.py's direct use but
+    has propagate=False to avoid double-logging its own messages.
+    """
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"{name}_{timestamp}.log")
-
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    logger.handlers.clear()
+    log_file  = os.path.join(log_dir, f"{name}_{timestamp}.log")
 
     fmt = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s",
+        "%(asctime)s | %(levelname)-8s | %(name)-30s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler (rotating)
+    # ── Root logger: catches ALL module-level loggers ──────────────────
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()   # avoid duplicate handlers on re-runs
+
     fh = logging.handlers.RotatingFileHandler(
         log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
     )
     fh.setFormatter(fmt)
     fh.setLevel(level)
-    logger.addHandler(fh)
+    root.addHandler(fh)
 
-    # Console handler
     if console:
         ch = logging.StreamHandler()
         ch.setFormatter(fmt)
-        ch.setLevel(logging.INFO)
-        logger.addHandler(ch)
+        ch.setLevel(level)
+        root.addHandler(ch)
 
-    # Propagate to root logger's children
-    logging.getLogger().setLevel(level)
+    # ── Named logger: returned to main.py for direct use ───────────────
+    # propagate=False prevents double-logging (root already has the handlers)
+    named = logging.getLogger(name)
+    named.setLevel(level)
+    named.handlers.clear()
+    named.propagate = True   # messages flow up to root handlers above
 
-    logger.info(f"Logger initialized: {log_file}")
-    return logger
+    named.info(f"Logger initialised → {log_file}  (level={logging.getLevelName(level)})")
+    return named
 
 
 # ─────────────────────────────────────────────

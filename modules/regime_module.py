@@ -189,7 +189,7 @@ def _feat_basis(df):
 
 @HMMFeatureRegistry.register("ret_divergence")
 def _feat_ret_div(df):
-    """Futures − spot return divergence — signals basis-driven moves."""
+    """Futures - spot return divergence — signals basis-driven moves."""
     if "ret_divergence" not in df.columns:
         return np.zeros(len(df))
     return df["ret_divergence"].fillna(0).clip(-0.05, 0.05).values
@@ -210,6 +210,43 @@ def _feat_trend_strength(df):
         return np.zeros(len(df))
     return df["trend_strength"].fillna(0).values
 
+# ── GARCH volatility ──────────────────────────────────────────────────────
+
+@HMMFeatureRegistry.register("garch_vol")
+def _feat_garch_vol(df):
+    """
+    GARCH conditional volatility (annualised).
+    Captures volatility clustering far better than rolling HV.
+    Requires GARCH to be fitted before HMM (run GARCHVolatilityModule first).
+    Falls back to volatility_20 if garch_vol is absent.
+    """
+    if "garch_vol" in df.columns:
+        return df["garch_vol"].ffill().fillna(
+            df["volatility_20"].ffill().fillna(0.15)
+            if "volatility_20" in df.columns else 0.15
+        ).values
+    logger.warning("[HMM] garch_vol not found — falling back to volatility_20. "
+                   "Run GARCHVolatilityModule before HMM to use this feature.")
+    if "volatility_20" in df.columns:
+        return df["volatility_20"].fillna(0.15).values
+    return np.full(len(df), 0.15)
+
+@HMMFeatureRegistry.register("garch_next_vol")
+def _feat_garch_next_vol(df):
+    """
+    GARCH one-step-ahead forecast volatility (scalar broadcast across all rows).
+    Represents the model's forward-looking volatility expectation.
+    Useful for distinguishing 'vol rising' vs 'vol falling' regimes.
+    Falls back to garch_vol if absent.
+    """
+    if "garch_next_vol" in df.columns:
+        return df["garch_next_vol"].ffill().fillna(
+            df["garch_vol"].ffill().fillna(0.15)
+            if "garch_vol" in df.columns else 0.15
+        ).values
+    logger.warning("[HMM] garch_next_vol not found — falling back to garch_vol.")
+    return _feat_garch_vol(df)
+
 
 # ─────────────────────────────────────────────
 # Market Regime Module
@@ -229,12 +266,12 @@ class MarketRegimeModule:
     DEFAULT_FEATURES = [
         # ── Core price / vol ──────────────────────────────────────
         "log_returns",       # primary return signal
-        "volatility_20",     # realised vol (HV)
+        "garch_vol",         # GARCH conditional vol — better than rolling HV
         "momentum_10",       # medium-term momentum
         "volume_ratio",      # volume conviction
         # ── Technical ─────────────────────────────────────────────
         "rsi_14",            # overbought / oversold
-        "atr_norm",          # volatility character of each regime
+        "atr_norm",          # intraday vol character of each regime
         "vwap_deviation",    # mean-reversion vs momentum
         # ── VIX / macro ───────────────────────────────────────────
         "vix_level",         # fear gauge level (normalised)
